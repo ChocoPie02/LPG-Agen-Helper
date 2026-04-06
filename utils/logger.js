@@ -1,3 +1,13 @@
+/**
+ * ** ====================================== **
+ *  *    This script is created for Education only   *
+ *  *  Do not sell or distribute it for profit *
+ * ** ====================================== **
+ *
+ *  * Author: @ChocoPie02
+ *  * Github Link: github.com/ChocoPie02
+ */
+
 import chalk from 'chalk';
 
 const PREFIX = '[ LPG Agen Helper ]';
