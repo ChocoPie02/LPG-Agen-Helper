@@ -1,0 +1,22 @@
+{
+  "name": "lpg-agen-helper",
+  "version": "1.0.0",
+  "description": "CLI scheduler untuk transaksi LPG agen MyPertamina",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js",
+    "check": "node --check main.js"
+  },
+  "dependencies": {
+    "@2captcha/captcha-solver": "^1.3.5",
+    "@antiadmin/anticaptchaofficial": "^1.0.55",
+    "axios": "^1.9.0",
+    "chalk": "^5.4.1",
+    "dotenv": "^16.5.0",
+    "form-data": "^4.0.2",
+    "https-proxy-agent": "^7.0.6",
+    "readline": "^1.3.0",
+    "socks-proxy-agent": "^8.0.5"
+  }
+}

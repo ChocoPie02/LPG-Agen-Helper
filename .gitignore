@@ -1,0 +1,7 @@
+.env
+Api/
+Reference/
+.github/
+node_modules/
+state.json
+logs.txt
