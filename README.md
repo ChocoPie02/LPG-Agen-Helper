@@ -33,8 +33,10 @@ Script mensimulasikan alur yang biasa dilakukan secara manual oleh agen:
 |-------|-----------|
 | **Habiskan Kuota** | Keluarkan semua stok yang tersedia secepat mungkin |
 | **Mode Harian** | Bagi stok ke sejumlah hari dan sebar transaksi di jam kerja |
-| **Mode Standby** | Pantau `stockDate`; otomatis mulai distribusi jika stok baru masuk |
+| **Mode Standby** | Cek stok harian di jam tertentu; otomatis mulai distribusi saat stok baru masuk |
+| **Mode Listen (API)** | Jalankan server port `8843` untuk trigger mode via HTTP |
 | **Token auto-renew** | Login ulang otomatis saat bearer token kadaluarsa |
+| **Bearer persistence** | Bearer token disimpan ke `state.json` dan dicoba dulu sebelum captcha |
 | **Provider captcha** | Pilih 2captcha atau anti-captcha via `.env` (tanya sekali, simpan permanen) |
 | **State persistence** | Resume otomatis dari `state.json` setelah restart |
 | **CSV extensible** | `data.csv` cukup kolom `nik`; siap diperluas untuk fitur registrasi NIK |
@@ -101,6 +103,8 @@ input interaktif saat pertama kali dijalankan dan menyimpannya otomatis).
 | `WORK_END` | | `18:00` | Jam berhenti transaksi |
 | `TIMEZONE` | | `Asia/Jakarta` | Zona waktu |
 | `STANDBY_POLL_MINUTES` | | `15` | Interval poll produk di mode standby |
+| `STANDBY_CHECK_TIME` | | `07:00` | Jam cek harian khusus mode standby (HH:mm) |
+| `LISTEN_PORT` | | `8843` | Port server mode listen |
 | `BETWEEN_TRANSACTION_SECONDS_MIN` | | `15` | Jeda minimum antar transaksi (detik) |
 | `BETWEEN_TRANSACTION_SECONDS_MAX` | | `45` | Jeda maksimum antar transaksi (detik) |
 
@@ -131,7 +135,7 @@ Pertama kali dijalankan, aplikasi akan menanyakan:
 1. Username & PIN (jika belum di `.env`)
 2. Provider captcha (jika belum di `.env`)
 3. API key captcha (jika belum di `.env`)
-4. Pilihan mode (`Habiskan Kuota` / `Mode Harian` / `Mode Standby`)
+4. Pilihan mode (`Habiskan Kuota` / `Mode Harian` / `Mode Standby` / `Mode Listen`)
 
 Semua jawaban yang diinput akan otomatis disimpan ke `.env` sehingga tidak
 ditanyakan kembali saat restart.
@@ -164,11 +168,108 @@ Input jumlah hari → stok dibagi merata dan disebarkan secara acak di dalam
 rentang jam kerja setiap harinya.
 
 ### Mode Standby
-Aplikasi polling produk setiap `STANDBY_POLL_MINUTES` menit. Jika `stockDate`
-terdeteksi hari ini atau kemarin:
-- Distribusi **tidak** dimulai di hari yang sama dengan `stockDate`
-- Mulai distribusi pada hari berikutnya menggunakan mekanik Mode Harian
-- State disimpan ke `state.json`; resume otomatis setelah restart
+Aplikasi melakukan pengecekan **1x per hari** sesuai `STANDBY_CHECK_TIME`
+(atau jam input user saat memilih standby). Jika `stockDate`
+terdeteksi hari ini atau kemarin dan `stockAvailable > 0`:
+- Distribusi bisa dimulai **di hari yang sama**
+- Mekanik distribusi tetap mengikuti Mode Harian
+- Saat `stockAvailable` kosong, mode standby tetap hidup dan lanjut cek harian
+
+### Mode Listen
+Mode ini menjalankan HTTP server agar mode scheduler bisa dipanggil dari sistem lain.
+Default port: `8843`.
+
+#### Endpoint
+
+1. `GET /health`
+```json
+{
+  "success": true,
+  "message": "listen mode aktif",
+  "code": 200
+}
+```
+
+2. `GET /status`
+```json
+{
+  "success": true,
+  "code": 200,
+  "data": {
+    "currentJob": {
+      "id": "job-1775500000000",
+      "mode": "harian",
+      "status": "running",
+      "requestedAt": "2026-04-06T12:00:00.000Z"
+    },
+    "activeMode": "Mode Harian",
+    "plan": {
+      "remainingStock": 40
+    }
+  }
+}
+```
+
+3. `POST /execute`
+
+Payload mode habiskan:
+```json
+{
+  "mode": "habiskan"
+}
+```
+
+Payload mode harian:
+```json
+{
+  "mode": "harian",
+  "totalDays": 7
+}
+```
+
+Payload mode standby:
+```json
+{
+  "mode": "standby",
+  "totalDays": 5,
+  "checkTime": "08:30"
+}
+```
+
+Response sukses (`202 Accepted`):
+```json
+{
+  "success": true,
+  "code": 202,
+  "message": "Job diterima dan dieksekusi.",
+  "data": {
+    "job": {
+      "id": "job-1775500000000",
+      "mode": "standby",
+      "status": "running",
+      "requestedAt": "2026-04-06T12:30:00.000Z"
+    }
+  }
+}
+```
+
+Response validasi gagal (`400 Bad Request`):
+```json
+{
+  "success": false,
+  "code": 400,
+  "message": "totalDays wajib integer > 0 untuk mode harian/standby."
+}
+```
+
+Response saat job lain masih aktif (`409 Conflict`):
+```json
+{
+  "success": false,
+  "code": 409,
+  "message": "Masih ada job berjalan. Tunggu job selesai dulu."
+}
+```
 
 ---
 

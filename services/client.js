@@ -17,10 +17,11 @@ class SessionExpiredError extends Error {
 }
 
 export class LpgAgenClient {
-  constructor({ config, captchaService, proxy = null }) {
+  constructor({ config, captchaService, proxy = null, onSessionChanged = null }) {
     this.config = config;
     this.captchaService = captchaService;
     this.proxy = proxy;
+    this.onSessionChanged = onSessionChanged;
     this.accessToken = null;
     this.accessTokenExpiresAt = null;
     this.agent = createProxyAgent(proxy);
@@ -83,8 +84,36 @@ export class LpgAgenClient {
     return Date.now() < (this.accessTokenExpiresAt - 30_000);
   }
 
+  setSession(session = null) {
+    this.accessToken = session?.accessToken || null;
+    this.accessTokenExpiresAt = session?.accessTokenExpiresAt || null;
+  }
+
+  emitSessionChanged() {
+    if (typeof this.onSessionChanged === 'function') {
+      this.onSessionChanged(this.getSession());
+    }
+  }
+
+  getSession() {
+    if (!this.accessToken) {
+      return null;
+    }
+
+    return {
+      accessToken: this.accessToken,
+      accessTokenExpiresAt: this.accessTokenExpiresAt,
+    };
+  }
+
+  clearSession() {
+    this.accessToken = null;
+    this.accessTokenExpiresAt = null;
+    this.emitSessionChanged();
+  }
+
   async login(force = false) {
-    if (!force && this.isSessionAlive()) {
+    if (!force && this.accessToken) {
       return this.accessToken;
     }
 
@@ -120,12 +149,15 @@ export class LpgAgenClient {
       throw new Error('Login berhasil tetapi access token tidak ditemukan.');
     }
 
+    this.emitSessionChanged();
     logger.success('Login berhasil.');
     return this.accessToken;
   }
 
   async authenticatedRequest({ method, url, headers = {}, data, params, retryOnAuthError = true }) {
-    await this.login();
+    if (!this.accessToken) {
+      await this.login();
+    }
 
     const response = await this.rawRequest({
       method,
@@ -144,8 +176,7 @@ export class LpgAgenClient {
       }
 
       logger.warn('Token kadaluarsa atau tidak valid. Memaksa login ulang...');
-      this.accessToken = null;
-      this.accessTokenExpiresAt = null;
+      this.clearSession();
       await this.login(true);
       return this.authenticatedRequest({ method, url, headers, data, params, retryOnAuthError: false });
     }
