@@ -140,6 +140,25 @@ Pertama kali dijalankan, aplikasi akan menanyakan:
 Semua jawaban yang diinput akan otomatis disimpan ke `.env` sehingga tidak
 ditanyakan kembali saat restart.
 
+### Menjalankan dengan argument (untuk PM2)
+
+Mode bisa dipilih langsung tanpa prompt interaktif:
+
+```bash
+node main.js --mode habiskan
+node main.js --mode harian --days 7
+node main.js --mode standby --days 5 --check-time 08:30
+node main.js --mode listen
+```
+
+Contoh PM2:
+
+```bash
+pm2 start main.js --name lpg-listen -- --mode listen
+pm2 start main.js --name lpg-harian -- --mode harian --days 7
+pm2 start main.js --name lpg-standby -- --mode standby --days 5 --check-time 08:30
+```
+
 ---
 
 ## Logika Prioritas Kuota

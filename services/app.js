@@ -36,6 +36,16 @@ const MODE_HARIAN = 'Mode Harian';
 const MODE_STANDBY = 'Mode Standby';
 const MODE_LISTEN = 'Mode Listen';
 
+const MODE_ALIAS = {
+  habiskan: MODE_HABISKAN,
+  habiskankuota: MODE_HABISKAN,
+  harian: MODE_HARIAN,
+  modestandby: MODE_STANDBY,
+  standby: MODE_STANDBY,
+  listen: MODE_LISTEN,
+  modelisten: MODE_LISTEN,
+};
+
 export class LpgAgenApp {
   constructor(baseDir) {
     this.baseDir = baseDir;
@@ -152,7 +162,7 @@ export class LpgAgenApp {
     return valid;
   }
 
-  async run() {
+  async run(runOptions = {}) {
     await this.prepareRuntime();
 
     const state = await this.stateStore.load();
@@ -165,15 +175,34 @@ export class LpgAgenApp {
       return;
     }
 
-    const mode = await promptChoice('Pilih mode awal:', [MODE_HABISKAN, MODE_HARIAN, MODE_STANDBY, MODE_LISTEN]);
+    const forcedMode = this.resolveModeFromArg(runOptions.mode);
+    if (forcedMode) {
+      logger.info(`Mode dipilih dari argument: ${forcedMode}`);
+      await this.executeModeByName(forcedMode, runOptions);
+      return;
+    }
 
+    const mode = await promptChoice('Pilih mode awal:', [MODE_HABISKAN, MODE_HARIAN, MODE_STANDBY, MODE_LISTEN]);
+    await this.executeModeByName(mode, runOptions);
+  }
+
+  resolveModeFromArg(modeArg) {
+    if (!modeArg) {
+      return null;
+    }
+
+    const normalized = String(modeArg).toLowerCase().replace(/\s+/gu, '');
+    return MODE_ALIAS[normalized] || null;
+  }
+
+  async executeModeByName(mode, options = {}) {
     if (mode === MODE_HABISKAN) {
       await this.startHabiskanMode();
       return;
     }
 
     if (mode === MODE_HARIAN) {
-      await this.startHarianMode();
+      await this.startHarianMode({ totalDays: options.days ?? options.totalDays });
       return;
     }
 
@@ -182,7 +211,10 @@ export class LpgAgenApp {
       return;
     }
 
-    await this.startStandbyMode();
+    await this.startStandbyMode({
+      totalDays: options.days ?? options.totalDays,
+      checkTime: options.checkTime,
+    });
   }
 
   async resumePlan(state) {
