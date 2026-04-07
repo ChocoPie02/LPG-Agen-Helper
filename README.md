@@ -187,7 +187,7 @@ Input jumlah hari → stok dibagi merata dan disebarkan secara acak di dalam
 rentang jam kerja setiap harinya.
 
 ### Mode Standby
-Aplikasi melakukan pengecekan **1x per hari** sesuai `STANDBY_CHECK_TIME`
+Aplikasi melakukan pengecekan **1x per hari** sesuai `STANDBY_CHECK_TIME` untuk menghemat captcha
 (atau jam input user saat memilih standby). Jika `stockDate`
 terdeteksi hari ini atau kemarin dan `stockAvailable > 0`:
 - Distribusi bisa dimulai **di hari yang sama**
