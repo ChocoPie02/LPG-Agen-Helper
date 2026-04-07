@@ -27,6 +27,18 @@ export class LpgAgenClient {
     this.agent = createProxyAgent(proxy);
   }
 
+  getQuantityForCustomerType(typeName) {
+    if (typeName === 'Rumah Tangga') {
+      return Math.max(safeNumber(this.config.QUANTITY_RUMAH_TANGGA, 1), 1);
+    }
+
+    if (typeName === 'Usaha Mikro') {
+      return Math.max(safeNumber(this.config.QUANTITY_USAHA_MIKRO, 2), 1);
+    }
+
+    return 0;
+  }
+
   setProxy(proxy = null) {
     this.proxy = proxy;
     this.agent = createProxyAgent(proxy);
@@ -287,7 +299,7 @@ export class LpgAgenClient {
         continue;
       }
 
-      const quantity = typeName === 'Rumah Tangga' ? 1 : 2;
+      const quantity = this.getQuantityForCustomerType(typeName);
       if (safeNumber(availableStock) < quantity) {
         continue;
       }
@@ -306,20 +318,21 @@ export class LpgAgenClient {
       const coordinate = typeName === 'Usaha Mikro'
         ? formatCoordinate(customerType?.merchant?.location)
         : '-,-';
+      const sourceTypeId = typeName === 'Rumah Tangga' ? 1 : customerType.sourceTypeId;
 
       return {
         ok: true,
         nik,
         quantity,
         category: typeName,
-        sourceTypeId: customerType.sourceTypeId,
+        sourceTypeId,
         payload: {
           quantity,
           token: detail.token,
           nationalityId: nik,
           familyIdEncrypted: detail.familyIdEncrypted,
           category: typeName,
-          sourceTypeId: customerType.sourceTypeId,
+          sourceTypeId,
           name: detail.name,
           channelInject: detail.channelInject,
           coordinate,

@@ -9,6 +9,7 @@
  */
 
 import chalk from 'chalk';
+import { getErrorMessage, isDebugErrorsEnabled } from './helper.js';
 
 const PREFIX = '[ LPG Agen Helper ]';
 
@@ -22,7 +23,7 @@ function stringify(value) {
   }
 
   if (value instanceof Error) {
-    return value.stack || value.message;
+    return isDebugErrorsEnabled() ? (value.stack || value.message) : getErrorMessage(value);
   }
 
   try {

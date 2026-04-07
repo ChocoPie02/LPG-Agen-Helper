@@ -5,6 +5,7 @@ import {
   buildDailyTargets,
   compareDateKeys,
   delay,
+  getErrorMessage,
   getSecondsUntilNextDay,
   getSecondsUntilNextTimeOfDay,
   getSecondsUntilWorkStart,
@@ -21,8 +22,10 @@ import {
   promptChoice,
   randomInt,
   readLines,
+  rememberRecentValue,
   safeNumber,
   shuffle,
+  shuffleAvoidingRecent,
   upsertEnvValue,
   ensureFile,
 } from '../utils/helper.js';
@@ -49,6 +52,7 @@ export class LpgAgenApp {
     this.dataPath = path.join(baseDir, 'data.csv');
     this.proxyPath = path.join(baseDir, 'proxy.txt');
     this.stateStore = new StateStore(baseDir);
+    this.recentNikHistory = [];
     this.config = this.loadConfig();
     this.captchaService = new CaptchaService({ config: this.config, envPath: this.envPath });
     this.client = new LpgAgenClient({
@@ -88,6 +92,10 @@ export class LpgAgenApp {
       STANDBY_POLL_MINUTES: process.env.STANDBY_POLL_MINUTES || '15',
       STANDBY_CHECK_TIME: parseWorkTime(process.env.STANDBY_CHECK_TIME, '07:00'),
       MAX_CUSTOMER_ATTEMPTS: process.env.MAX_CUSTOMER_ATTEMPTS || '30',
+      QUANTITY_RUMAH_TANGGA: process.env.QUANTITY_RUMAH_TANGGA || '1',
+      QUANTITY_USAHA_MIKRO: process.env.QUANTITY_USAHA_MIKRO || '2',
+      HABISKAN_STRATEGY: process.env.HABISKAN_STRATEGY || 'precheck',
+      RECENT_NIK_WINDOW: process.env.RECENT_NIK_WINDOW || '10',
     };
   }
 
@@ -458,20 +466,69 @@ export class LpgAgenApp {
     return dayIndex;
   }
 
-  async sellUntilTarget({ unitsTarget, mode }) {
-    const records = await this.loadNikRecords();
+  getRecentNikWindow(recordsLength = 0) {
+    const configured = Math.max(safeNumber(this.config.RECENT_NIK_WINDOW, 10), 0);
+    if (recordsLength <= 1) {
+      return 0;
+    }
+    return Math.min(configured, recordsLength - 1);
+  }
+
+  getOrderedCandidateList(records) {
+    return shuffleAvoidingRecent(
+      records,
+      this.recentNikHistory,
+      (record) => record.nik,
+      this.getRecentNikWindow(records.length)
+    );
+  }
+
+  rememberNikUsage(nik) {
+    this.recentNikHistory = rememberRecentValue(
+      this.recentNikHistory,
+      nik,
+      Math.max(safeNumber(this.config.RECENT_NIK_WINDOW, 10), 1)
+    );
+  }
+
+  getWaitSecondsBetweenTransactions() {
+    const minimum = safeNumber(this.config.BETWEEN_TRANSACTION_SECONDS_MIN, 15);
+    const maximum = safeNumber(this.config.BETWEEN_TRANSACTION_SECONDS_MAX, 45);
+    return randomInt(Math.min(minimum, maximum), Math.max(minimum, maximum));
+  }
+
+  getHabiskanStrategy() {
+    const normalized = String(this.config.HABISKAN_STRATEGY || 'precheck').trim().toLowerCase();
+    return normalized === 'direct' ? 'direct' : 'precheck';
+  }
+
+  async executeResolvedCandidate(candidate, mode) {
+    const transaction = await this.client.createTransaction(candidate.payload);
+    return {
+      ok: true,
+      nik: candidate.nik,
+      quantity: candidate.quantity,
+      category: candidate.category,
+      transactionId: transaction?.data?.transactionId,
+      transactionIdUnique: transaction?.data?.transactionIdUnique,
+      detail: candidate.detail,
+    };
+  }
+
+  async sellWithDirectStrategy({ records, unitsTarget, mode, maxAttempts }) {
     let remainingTarget = Math.max(Number(unitsTarget) || 0, 0);
     let unitsSold = 0;
     let completedUnits = 0;
     let attempts = 0;
-    const maxAttempts = Math.max(Number(this.config.MAX_CUSTOMER_ATTEMPTS || 30), 1);
 
     while (remainingTarget > 0 && attempts < maxAttempts) {
       attempts += 1;
-      const candidateList = shuffle(records);
+      const candidateList = this.getOrderedCandidateList(records);
       let soldInThisAttempt = false;
 
       for (const record of candidateList) {
+        this.rememberNikUsage(record.nik);
+
         try {
           const result = await this.client.executeTransactionForRecord(record, remainingTarget);
           if (!result.ok) {
@@ -492,7 +549,7 @@ export class LpgAgenApp {
           soldInThisAttempt = true;
           break;
         } catch (error) {
-          logger.warn(`Gagal proses NIK ${record.nik}.`, error.message);
+          logger.warn(`Gagal proses NIK ${record.nik}.`, getErrorMessage(error));
         }
       }
 
@@ -500,11 +557,8 @@ export class LpgAgenApp {
         break;
       }
 
-      const waitSeconds = randomInt(
-        Number(this.config.BETWEEN_TRANSACTION_SECONDS_MIN || 15),
-        Number(this.config.BETWEEN_TRANSACTION_SECONDS_MAX || 45)
-      );
       if (remainingTarget > 0) {
+        const waitSeconds = this.getWaitSecondsBetweenTransactions();
         logger.info(`Menunggu ${waitSeconds} detik sebelum transaksi berikutnya.`);
         await delay(waitSeconds);
       }
@@ -516,5 +570,94 @@ export class LpgAgenApp {
       remainingStock: Math.max(remainingTarget, 0),
       attempts,
     };
+  }
+
+  async sellWithHabiskanPrecheck({ records, unitsTarget, mode, maxAttempts }) {
+    let remainingTarget = Math.max(Number(unitsTarget) || 0, 0);
+    let unitsSold = 0;
+    let completedUnits = 0;
+    let attempts = 0;
+
+    while (remainingTarget > 0 && attempts < maxAttempts) {
+      attempts += 1;
+      const candidateList = this.getOrderedCandidateList(records);
+      const resolvedCandidates = [];
+      let plannedRemaining = remainingTarget;
+
+      for (const record of candidateList) {
+        this.rememberNikUsage(record.nik);
+
+        try {
+          const candidate = await this.client.resolveSellableCustomer(record, plannedRemaining);
+          if (!candidate.ok) {
+            logger.debug(`NIK ${record.nik} dilewati.`, candidate.reason);
+            continue;
+          }
+
+          resolvedCandidates.push(candidate);
+          plannedRemaining -= candidate.quantity;
+          if (plannedRemaining <= 0) {
+            break;
+          }
+        } catch (error) {
+          logger.warn(`Gagal pre-check NIK ${record.nik}.`, getErrorMessage(error));
+        }
+      }
+
+      if (resolvedCandidates.length === 0) {
+        break;
+      }
+
+      logger.info(`Mode Habiskan pre-check menemukan ${resolvedCandidates.length} kandidat transaksi.`);
+      let soldInThisAttempt = false;
+
+      for (const candidate of resolvedCandidates) {
+        try {
+          const result = await this.executeResolvedCandidate(candidate, mode);
+          unitsSold += result.quantity;
+          completedUnits += result.quantity;
+          remainingTarget -= result.quantity;
+          logger.success(`Transaksi berhasil ${result.category} untuk NIK ${result.nik}.`, {
+            quantity: result.quantity,
+            transactionId: result.transactionId,
+            transactionIdUnique: result.transactionIdUnique,
+            mode,
+          });
+
+          soldInThisAttempt = true;
+          if (remainingTarget <= 0) {
+            break;
+          }
+
+          const waitSeconds = this.getWaitSecondsBetweenTransactions();
+          logger.info(`Menunggu ${waitSeconds} detik sebelum transaksi berikutnya.`);
+          await delay(waitSeconds);
+        } catch (error) {
+          logger.warn(`Gagal eksekusi transaksi NIK ${candidate.nik}.`, getErrorMessage(error));
+        }
+      }
+
+      if (!soldInThisAttempt) {
+        break;
+      }
+    }
+
+    return {
+      unitsSold,
+      completedUnits,
+      remainingStock: Math.max(remainingTarget, 0),
+      attempts,
+    };
+  }
+
+  async sellUntilTarget({ unitsTarget, mode }) {
+    const records = await this.loadNikRecords();
+    const maxAttempts = Math.max(Number(this.config.MAX_CUSTOMER_ATTEMPTS || 30), 1);
+
+    if (mode === MODE_HABISKAN && this.getHabiskanStrategy() === 'precheck') {
+      return this.sellWithHabiskanPrecheck({ records, unitsTarget, mode, maxAttempts });
+    }
+
+    return this.sellWithDirectStrategy({ records, unitsTarget, mode, maxAttempts });
   }
 }

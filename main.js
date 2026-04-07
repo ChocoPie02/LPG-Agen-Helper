@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import banner from './utils/banner.js';
 import logger from './utils/logger.js';
+import { getErrorMessage, isDebugErrorsEnabled } from './utils/helper.js';
 import { LpgAgenApp } from './services/app.js';
 
 function parseCliArgs(argv) {
@@ -41,7 +42,7 @@ async function main() {
     const cliArgs = parseCliArgs(process.argv.slice(2));
     await app.run(cliArgs);
   } catch (error) {
-    logger.error('Aplikasi berhenti dengan error.', error?.stack || error?.message || String(error));
+    logger.error('Aplikasi berhenti dengan error.', isDebugErrorsEnabled() ? error : getErrorMessage(error));
     process.exitCode = 1;
   }
 }

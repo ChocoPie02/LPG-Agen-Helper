@@ -137,6 +137,41 @@ export function shuffle(items) {
   return cloned;
 }
 
+export function shuffleAvoidingRecent(items, recentValues = [], getValue = (item) => item, recentWindow = recentValues.length) {
+  const shuffled = shuffle(items);
+  const safeWindow = Math.max(Number(recentWindow) || 0, 0);
+  if (safeWindow === 0 || recentValues.length === 0) {
+    return shuffled;
+  }
+
+  const recentSet = new Set(recentValues.slice(-safeWindow));
+  const preferred = [];
+  const deferred = [];
+
+  for (const item of shuffled) {
+    const value = getValue(item);
+    if (recentSet.has(value)) {
+      deferred.push(item);
+    } else {
+      preferred.push(item);
+    }
+  }
+
+  return [...preferred, ...deferred];
+}
+
+export function rememberRecentValue(recentValues, value, limit = 10) {
+  const normalized = Array.isArray(recentValues) ? [...recentValues] : [];
+  const safeLimit = Math.max(Number(limit) || 0, 0);
+  if (!value || safeLimit === 0) {
+    return normalized;
+  }
+
+  const filtered = normalized.filter((item) => item !== value);
+  filtered.push(value);
+  return filtered.slice(-safeLimit);
+}
+
 export function createProxyAgent(proxy) {
   if (!proxy) {
     return null;
@@ -213,6 +248,26 @@ function escapeForRegex(value) {
 
 export function parseNik(value) {
   return String(value || '').replace(/\D/gu, '');
+}
+
+export function getErrorMessage(error, fallback = 'Terjadi kesalahan.') {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object' && typeof error.message === 'string' && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+
+  return fallback;
+}
+
+export function isDebugErrorsEnabled() {
+  return /^(1|true|yes|on)$/iu.test(String(process.env.DEBUG_ERRORS || '').trim());
 }
 
 export function isValidNik(value) {
