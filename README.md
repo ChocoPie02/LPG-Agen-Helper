@@ -33,8 +33,9 @@ Script mensimulasikan alur yang biasa dilakukan secara manual oleh agen:
 |-------|-----------|
 | **Habiskan Kuota** | Keluarkan semua stok yang tersedia secepat mungkin |
 | **Mode Harian** | Bagi stok ke sejumlah hari dan sebar transaksi di jam kerja |
-| **Mode Standby** | Pantau `stockDate`; otomatis mulai distribusi jika stok baru masuk |
+| **Mode Standby** | Cek stok harian di jam tertentu; otomatis mulai distribusi saat stok baru masuk |
 | **Token auto-renew** | Login ulang otomatis saat bearer token kadaluarsa |
+| **Bearer persistence** | Bearer token disimpan ke `state.json` dan dicoba dulu sebelum captcha |
 | **Provider captcha** | Pilih 2captcha atau anti-captcha via `.env` (tanya sekali, simpan permanen) |
 | **State persistence** | Resume otomatis dari `state.json` setelah restart |
 | **CSV extensible** | `data.csv` cukup kolom `nik`; siap diperluas untuk fitur registrasi NIK |
@@ -101,6 +102,7 @@ input interaktif saat pertama kali dijalankan dan menyimpannya otomatis).
 | `WORK_END` | | `18:00` | Jam berhenti transaksi |
 | `TIMEZONE` | | `Asia/Jakarta` | Zona waktu |
 | `STANDBY_POLL_MINUTES` | | `15` | Interval poll produk di mode standby |
+| `STANDBY_CHECK_TIME` | | `07:00` | Jam cek harian khusus mode standby (HH:mm) |
 | `BETWEEN_TRANSACTION_SECONDS_MIN` | | `15` | Jeda minimum antar transaksi (detik) |
 | `BETWEEN_TRANSACTION_SECONDS_MAX` | | `45` | Jeda maksimum antar transaksi (detik) |
 
@@ -138,6 +140,27 @@ ditanyakan kembali saat restart.
 
 ---
 
+### Menjalankan dengan argument (untuk PM2)
+
+Mode bisa dipilih langsung tanpa prompt interaktif:
+
+```bash
+node main.js --mode habiskan
+node main.js --mode harian --days 7
+node main.js --mode standby --days 5 --check-time 08:30
+node main.js --mode listen
+```
+
+Contoh PM2:
+
+```bash
+pm2 start main.js --name lpg-listen -- --mode listen
+pm2 start main.js --name lpg-harian -- --mode harian --days 7
+pm2 start main.js --name lpg-standby -- --mode standby --days 5 --check-time 08:30
+```
+
+---
+
 ## Logika Prioritas Kuota
 
 Untuk setiap NIK yang diproses:
@@ -164,11 +187,12 @@ Input jumlah hari → stok dibagi merata dan disebarkan secara acak di dalam
 rentang jam kerja setiap harinya.
 
 ### Mode Standby
-Aplikasi polling produk setiap `STANDBY_POLL_MINUTES` menit. Jika `stockDate`
-terdeteksi hari ini atau kemarin:
-- Distribusi **tidak** dimulai di hari yang sama dengan `stockDate`
-- Mulai distribusi pada hari berikutnya menggunakan mekanik Mode Harian
-- State disimpan ke `state.json`; resume otomatis setelah restart
+Aplikasi melakukan pengecekan **1x per hari** sesuai `STANDBY_CHECK_TIME`
+untuk menghemat captcha (atau jam input user saat memilih standby). Jika `stockDate`
+terdeteksi hari ini atau kemarin dan `stockAvailable > 0`:
+- Distribusi bisa dimulai **di hari yang sama**
+- Mekanik distribusi tetap mengikuti Mode Harian
+- Saat `stockAvailable` kosong, mode standby tetap hidup dan lanjut cek harian
 
 ---
 

@@ -6,6 +6,7 @@ import {
   compareDateKeys,
   delay,
   getSecondsUntilNextDay,
+  getSecondsUntilNextTimeOfDay,
   getSecondsUntilWorkStart,
   getTodayKey,
   isTodayOrYesterday,
@@ -33,6 +34,14 @@ const MODE_HABISKAN = 'Habiskan Kuota';
 const MODE_HARIAN = 'Mode Harian';
 const MODE_STANDBY = 'Mode Standby';
 
+const MODE_ALIAS = {
+  habiskan: MODE_HABISKAN,
+  habiskankuota: MODE_HABISKAN,
+  harian: MODE_HARIAN,
+  modestandby: MODE_STANDBY,
+  standby: MODE_STANDBY,
+};
+
 export class LpgAgenApp {
   constructor(baseDir) {
     this.baseDir = baseDir;
@@ -42,7 +51,15 @@ export class LpgAgenApp {
     this.stateStore = new StateStore(baseDir);
     this.config = this.loadConfig();
     this.captchaService = new CaptchaService({ config: this.config, envPath: this.envPath });
-    this.client = new LpgAgenClient({ config: this.config, captchaService: this.captchaService });
+    this.client = new LpgAgenClient({
+      config: this.config,
+      captchaService: this.captchaService,
+      onSessionChanged: (session) => {
+        this.stateStore.patch({ session }).catch((error) => {
+          logger.warn('Gagal menyimpan session ke state.json.', error.message);
+        });
+      },
+    });
   }
 
   loadConfig() {
@@ -69,6 +86,7 @@ export class LpgAgenApp {
       BETWEEN_TRANSACTION_SECONDS_MIN: process.env.BETWEEN_TRANSACTION_SECONDS_MIN || '15',
       BETWEEN_TRANSACTION_SECONDS_MAX: process.env.BETWEEN_TRANSACTION_SECONDS_MAX || '45',
       STANDBY_POLL_MINUTES: process.env.STANDBY_POLL_MINUTES || '15',
+      STANDBY_CHECK_TIME: parseWorkTime(process.env.STANDBY_CHECK_TIME, '07:00'),
       MAX_CUSTOMER_ATTEMPTS: process.env.MAX_CUSTOMER_ATTEMPTS || '30',
     };
   }
@@ -108,6 +126,12 @@ export class LpgAgenApp {
     await this.captchaService.ensureConfigured();
     await this.refreshConfigFromEnv();
 
+    const state = await this.stateStore.load();
+    if (state?.session?.accessToken) {
+      this.client.setSession(state.session);
+      logger.info('Session bearer dari state.json dimuat, akan dicoba sebelum captcha.');
+    }
+
     const proxies = await readLines(this.proxyPath);
     if (proxies.length > 0) {
       const proxy = pickRandom(proxies);
@@ -131,7 +155,7 @@ export class LpgAgenApp {
     return valid;
   }
 
-  async run() {
+  async run(runOptions = {}) {
     await this.prepareRuntime();
 
     const state = await this.stateStore.load();
@@ -144,7 +168,26 @@ export class LpgAgenApp {
       return;
     }
 
+    const forcedMode = this.resolveModeFromArg(runOptions.mode);
+    if (forcedMode) {
+      logger.info(`Mode dipilih dari argument: ${forcedMode}`);
+      await this.executeModeByName(forcedMode, runOptions);
+      return;
+    }
+
     const mode = await promptChoice('Pilih mode awal:', [MODE_HABISKAN, MODE_HARIAN, MODE_STANDBY]);
+    await this.executeModeByName(mode, runOptions);
+  }
+  resolveModeFromArg(modeArg) {
+    if (!modeArg) {
+      return null;
+    }
+
+    const normalized = String(modeArg).toLowerCase().replace(/\s+/gu, '');
+    return MODE_ALIAS[normalized] || null;
+  }
+
+  async executeModeByName(mode, options = {}) {
 
     if (mode === MODE_HABISKAN) {
       await this.startHabiskanMode();
@@ -152,11 +195,14 @@ export class LpgAgenApp {
     }
 
     if (mode === MODE_HARIAN) {
-      await this.startHarianMode();
+      await this.startHarianMode({ totalDays: options.days ?? options.totalDays });
       return;
     }
 
-    await this.startStandbyMode();
+    await this.startStandbyMode({
+      totalDays: options.days ?? options.totalDays,
+      checkTime: options.checkTime,
+    });
   }
 
   async resumePlan(state) {
@@ -180,7 +226,7 @@ export class LpgAgenApp {
     const productResponse = await this.client.getProductUser();
 
     if (profileResponse?.data?.isAvailableTransaction === false) {
-      throw new Error('Merchant sedang tidak bisa transaksi.');
+      throw new Error('Merchant sedang tidak bisa transaksi. Stok sudah kosong');
     }
 
     const snapshot = {
@@ -233,14 +279,14 @@ export class LpgAgenApp {
     await this.stateStore.resetPlan();
   }
 
-  async startHarianMode() {
+  async startHarianMode(options = {}) {
     const snapshot = await this.getFreshProductSnapshot();
     const stockAvailable = safeNumber(snapshot.product?.stockAvailable, 0);
     if (stockAvailable <= 0) {
       throw new Error('Stock available sedang kosong.');
     }
 
-    const rawDays = await prompt('Habiskan stok dalam berapa hari? ');
+    const rawDays = options.totalDays ?? await prompt('Habiskan stok dalam berapa hari? ');
     const totalDays = Math.max(Number(rawDays) || 1, 1);
     const today = getTodayKey(this.config.TIMEZONE);
     const targets = buildDailyTargets(stockAvailable, totalDays);
@@ -260,12 +306,15 @@ export class LpgAgenApp {
     await this.executeDailyPlan(plan);
   }
 
-  async startStandbyMode() {
-    const rawDays = await prompt('Jika stok baru terdeteksi, habiskan dalam berapa hari? ');
+   async startStandbyMode(options = {}) {
+    const rawDays = options.totalDays ?? await prompt('Jika stok baru terdeteksi, habiskan dalam berapa hari? ');
     const totalDays = Math.max(Number(rawDays) || 1, 1);
+    const rawCheckTime = options.checkTime ?? await prompt(`Jam cek standby harian (HH:mm) [default ${this.config.STANDBY_CHECK_TIME}]: `);
+    const checkTime = parseWorkTime(rawCheckTime || this.config.STANDBY_CHECK_TIME, this.config.STANDBY_CHECK_TIME);
     const plan = {
       mode: MODE_STANDBY,
       totalDays,
+      checkTime,
       waitingForStock: true,
       originalStock: 0,
       remainingStock: 0,
@@ -283,48 +332,59 @@ export class LpgAgenApp {
 
   async monitorStandby(plan) {
     while (true) {
-      const snapshot = await this.getFreshProductSnapshot();
-      const stockAvailable = safeNumber(snapshot.product?.stockAvailable, 0);
-      const stockDate = parseStockDateLabel(snapshot.product?.stockDate, this.config.TIMEZONE);
+      try {
+        const waitSeconds = getSecondsUntilNextTimeOfDay(plan.checkTime || this.config.STANDBY_CHECK_TIME, this.config.TIMEZONE);
+        logger.info(`Mode standby menunggu jadwal cek harian ${plan.checkTime || this.config.STANDBY_CHECK_TIME}.`);
+        await delay(waitSeconds);
 
-      if (plan.waitingForStock) {
-        if (stockAvailable > 0 && isTodayOrYesterday(stockDate, this.config.TIMEZONE)) {
-          const today = getTodayKey(this.config.TIMEZONE);
-          const distributionStart = stockDate === today ? addDays(today, 1) : today;
-          plan.waitingForStock = false;
-          plan.originalStock = stockAvailable;
-          plan.remainingStock = stockAvailable;
-          plan.stockDate = stockDate;
-          plan.startDate = distributionStart;
-          plan.targets = buildDailyTargets(stockAvailable, plan.totalDays);
-          plan.completedUnits = 0;
-          logger.success(`Stok baru terdeteksi. Distribusi mulai ${distributionStart}.`);
-          await this.stateStore.patch({ activeMode: MODE_STANDBY, plan });
-        } else {
-          logger.info('Mode standby menunggu stockDate hari ini/kemarin.');
-          await delay(Number(this.config.STANDBY_POLL_MINUTES || 15) * 60);
-          continue;
+        const snapshot = await this.getFreshProductSnapshot();
+        const stockAvailable = safeNumber(snapshot.product?.stockAvailable, 0);
+        const stockDate = parseStockDateLabel(snapshot.product?.stockDate, this.config.TIMEZONE);
+
+        if (plan.waitingForStock) {
+          if (stockAvailable > 0 && isTodayOrYesterday(stockDate, this.config.TIMEZONE)) {
+            const today = getTodayKey(this.config.TIMEZONE);
+            const distributionStart = today;
+            plan.waitingForStock = false;
+            plan.originalStock = stockAvailable;
+            plan.remainingStock = stockAvailable;
+            plan.stockDate = stockDate;
+            plan.startDate = distributionStart;
+            plan.targets = buildDailyTargets(stockAvailable, plan.totalDays);
+            plan.completedUnits = 0;
+            logger.success(`Stok baru terdeteksi. Distribusi mulai ${distributionStart}.`);
+            await this.stateStore.patch({ activeMode: MODE_STANDBY, plan });
+          } else {
+            if (stockAvailable <= 0) {
+              logger.info('Mode standby aktif: stockAvailable masih kosong, lanjut monitoring.');
+            } else {
+              logger.info('Mode standby menunggu stockDate hari ini/kemarin.');
+            }
+            continue;
+          }
         }
+
+        await this.executeDailyPlan(plan, MODE_STANDBY);
+
+        if (plan.remainingStock <= 0) {
+          logger.success('Rencana standby selesai. Kembali ke mode menunggu.');
+          plan.waitingForStock = true;
+          plan.originalStock = 0;
+          plan.remainingStock = 0;
+          plan.startDate = null;
+          plan.stockDate = null;
+          plan.targets = [];
+          plan.completedByDate = {};
+          plan.completedUnits = 0;
+          await this.stateStore.patch({ activeMode: MODE_STANDBY, plan });
+
+        }
+        } catch (error) {
+        logger.error('Standby mode error, loop akan lanjut retry.', error?.message || String(error));
       }
-
-      await this.executeDailyPlan(plan, MODE_STANDBY);
-
-      if (plan.remainingStock <= 0) {
-        logger.success('Rencana standby selesai. Kembali ke mode menunggu.');
-        plan.waitingForStock = true;
-        plan.originalStock = 0;
-        plan.remainingStock = 0;
-        plan.startDate = null;
-        plan.stockDate = null;
-        plan.targets = [];
-        plan.completedByDate = {};
-        plan.completedUnits = 0;
-        await this.stateStore.patch({ activeMode: MODE_STANDBY, plan });
       }
-
-      await delay(Number(this.config.STANDBY_POLL_MINUTES || 15) * 60);
-    }
   }
+    
 
   async executeDailyPlan(plan, forcedMode = MODE_HARIAN) {
     while (plan.remainingStock > 0) {

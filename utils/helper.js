@@ -368,6 +368,23 @@ export function getSecondsUntilNextDay(timeZone = 'Asia/Jakarta', date = new Dat
   return Math.max((24 * 3600) - currentSeconds, 1);
 }
 
+export function getSecondsUntilNextTimeOfDay(timeOfDay, timeZone = 'Asia/Jakarta', date = new Date()) {
+  const [targetHour, targetMinute] = timeOfDay.split(':').map(Number);
+  const parts = getDateParts(timeZone, date);
+  const currentHour = Number(parts.hour);
+  const currentMinute = Number(parts.minute);
+  const currentSecond = Number(parts.second);
+
+  const currentTotal = (currentHour * 3600) + (currentMinute * 60) + currentSecond;
+  const targetTotal = (targetHour * 3600) + (targetMinute * 60);
+
+  if (currentTotal < targetTotal) {
+    return Math.max(targetTotal - currentTotal, 1);
+  }
+
+  return Math.max((24 * 3600) - currentTotal + targetTotal, 1);
+}
+
 export function buildDailyTargets(stockAvailable, totalDays) {
   const targets = [];
   let remaining = Number(stockAvailable);
