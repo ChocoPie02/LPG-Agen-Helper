@@ -24,7 +24,39 @@ export class LpgAgenClient {
     this.onSessionChanged = onSessionChanged;
     this.accessToken = null;
     this.accessTokenExpiresAt = null;
+    this.requestTimestamps = [];
     this.agent = createProxyAgent(proxy);
+  }
+
+  getMaxRequestsPerMinute() {
+    const configuredLimit = Math.floor(safeNumber(this.config.MAX_REQUESTS_PER_MINUTE, 45));
+    return Math.max(configuredLimit, 0);
+  }
+
+  pruneRequestTimestamps(now = Date.now()) {
+    const oneMinuteAgo = now - 60_000;
+    this.requestTimestamps = this.requestTimestamps.filter((timestamp) => timestamp > oneMinuteAgo);
+  }
+
+  async waitForRateLimitSlot() {
+    const maxRequestsPerMinute = this.getMaxRequestsPerMinute();
+    if (maxRequestsPerMinute <= 0) {
+      return;
+    }
+
+    while (true) {
+      const now = Date.now();
+      this.pruneRequestTimestamps(now);
+
+      if (this.requestTimestamps.length < maxRequestsPerMinute) {
+        this.requestTimestamps.push(now);
+        return;
+      }
+
+      const waitMs = Math.max(60_000 - (now - this.requestTimestamps[0]), 200);
+      logger.info(`Rate limit aktif (${maxRequestsPerMinute} request/menit). Menunggu ${Math.ceil(waitMs / 1000)} detik.`);
+      await delayMs(waitMs);
+    }
   }
 
   getQuantityForCustomerType(typeName) {
@@ -60,6 +92,7 @@ export class LpgAgenClient {
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
       try {
+        await this.waitForRateLimitSlot();
         return await axios({
           method,
           url,
@@ -299,8 +332,9 @@ export class LpgAgenClient {
         continue;
       }
 
-      const quantity = this.getQuantityForCustomerType(typeName);
-      if (safeNumber(availableStock) < quantity) {
+      const configuredQuantity = this.getQuantityForCustomerType(typeName);
+      const stockRemaining = Math.max(safeNumber(availableStock, 0), 0);
+      if (stockRemaining <= 0) {
         continue;
       }
 
@@ -311,7 +345,8 @@ export class LpgAgenClient {
       });
 
       const quotaRemaining = safeNumber(quotaResponse?.data?.quotaRemaining?.monthly, 0);
-      if (quotaRemaining < quantity) {
+      const quantity = Math.min(configuredQuantity, stockRemaining, quotaRemaining);
+      if (quantity <= 0) {
         continue;
       }
 

@@ -101,6 +101,7 @@ input interaktif saat pertama kali dijalankan dan menyimpannya otomatis).
 | `WORK_START` | | `07:00` | Jam mulai transaksi |
 | `WORK_END` | | `18:00` | Jam berhenti transaksi |
 | `TIMEZONE` | | `Asia/Jakarta` | Zona waktu |
+| `MAX_REQUESTS_PER_MINUTE` | | `45` | Batas maksimum hit API per menit (`0` = nonaktif) |
 | `STANDBY_POLL_MINUTES` | | `15` | Interval poll produk di mode standby |
 | `STANDBY_CHECK_TIME` | | `07:00` | Jam cek harian khusus mode standby (HH:mm) |
 | `BETWEEN_TRANSACTION_SECONDS_MIN` | | `15` | Jeda minimum antar transaksi (detik) |
@@ -167,10 +168,10 @@ Untuk setiap NIK yang diproses:
 
 ```
 Customer punya Rumah Tangga?
-  └─ quota > 0?  ✅  → transaksi quantity=1, coordinate="-,-"
+  └─ quota > 0?  ✅  → quantity menyesuaikan min(config, sisa target, sisa quota), coordinate="-,-"
   └─ quota = 0?  ⬇️ cek Usaha Mikro
 Customer punya Usaha Mikro?
-  └─ quota >= 2? ✅  → transaksi quantity=2, coordinate dari merchant.location
+  └─ quota > 0?  ✅  → quantity menyesuaikan min(config, sisa target, sisa quota), coordinate dari merchant.location
   └─ habis?      ❌  → lewati NIK ini
 ```
 
