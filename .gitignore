@@ -5,5 +5,5 @@ Reference/
 node_modules/
 state.json
 logs.txt
-data.csv
 state*.json
+data.csv

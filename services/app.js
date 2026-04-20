@@ -93,6 +93,7 @@ export class LpgAgenApp {
       TIMEZONE: process.env.TIMEZONE || 'Asia/Jakarta',
       REQUEST_TIMEOUT_MS: process.env.REQUEST_TIMEOUT_MS || '45000',
       MAX_RETRIES: process.env.MAX_RETRIES || '3',
+      MAX_REQUESTS_PER_MINUTE: process.env.MAX_REQUESTS_PER_MINUTE || '45',
       BETWEEN_TRANSACTION_SECONDS_MIN: process.env.BETWEEN_TRANSACTION_SECONDS_MIN || '15',
       BETWEEN_TRANSACTION_SECONDS_MAX: process.env.BETWEEN_TRANSACTION_SECONDS_MAX || '45',
       STANDBY_POLL_MINUTES: process.env.STANDBY_POLL_MINUTES || '15',
@@ -189,6 +190,8 @@ export class LpgAgenApp {
       await this.executeModeByName(forcedMode, runOptions);
       return;
     }
+
+
 
     const mode = await promptChoice('Pilih mode awal:', [MODE_HABISKAN, MODE_HARIAN, MODE_STANDBY, MODE_LISTEN]);
     await this.executeModeByName(mode, runOptions);
